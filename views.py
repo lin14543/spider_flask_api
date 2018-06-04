@@ -1,6 +1,5 @@
 # encoding:utf-8
 import json, redis, settings, os, csv, time
-from models import CPU
 from flask import Flask
 from flask import request
 from flask_apscheduler import APScheduler
@@ -10,9 +9,6 @@ app = Flask(__name__)
 scheduler = APScheduler()
 
 db = redis.Redis(host=settings.REDIS_SERVER, port=settings.REDIS_PORT, db=0)
-
-def job1(a, b):
-    print(str(a) + ' ' + str(b))
 
 @app.route('/gettask')
 def gettask():
@@ -36,7 +32,6 @@ def gettask():
 def pushtask(carrier=None):
     if not carrier:
         return
-    print('start')
     if not db.llen(carrier) or db.llen(carrier) < 1000:
         inputFile = open(os.path.join('src', '%s.csv' % carrier), 'r')
         inputReader = csv.reader(inputFile)
@@ -51,25 +46,74 @@ def pushtask(carrier=None):
     else:
         print('it is full')
 
+@app.route('/pushcmd', method=['GET', 'POST'])
+def pushcmd():
+    host = request.args.get('carrier').lower()
+    datas = request.form
+    ret = {}
+    if not datas or not len(datas):
+        ret['status'] = 2
+        ret['msg'] = 'data is empty !'
+    elif len(datas) > 100:
+        ret['status'] = 1
+        ret['msg'] = 'data is too much!'
+    else:
+        item = 0
+        for data in datas:
+            cmds = data.get('cmds')
+            devices = data.get('devices')
+            if not cmds or not devices or not len(cmds) or not len(devices):
+                continue
+            for cmd in cmds:
+                for device in devices:
+                    item += 1
+                    db.rpush(device, cmd)
+        ret['status'] = 0
+        ret['msg'] = 'has pushed %s items' % item
+    return json.dumps(ret)
 
-
+@app.route('/getcmd')
+def getcmd():
+    ret = {}
+    host = request.args.get('host').lower()
+    cmd = []
+    while db.llen(host):
+        cmd.append(db.lpop())
+    if not len(cmd):
+        ret['status'] = 1
+        ret['msg'] = 'there is no command!'
+        ret['data'] = []
+    else:
+        ret['status'] = 0
+        ret['msg'] = ''
+        ret['data'] = cmd
+    return json.dumps(ret)
 
 @app.route('/pause')
 def pausejob():
+    ret = {}
     carrier = request.args.get('carrier').lower()
     scheduler.pause_job(carrier)
-    return "Success!"
+    ret['status'] = 0
+    ret['msg'] = 'pause success!'
+    return json.dumps(ret)
 
-@app.route('/jobstatu')
-def getstatu():
-    carrier = request.args.get('carrier').lower()
-    job = scheduler.get_job(carrier)
-    print(dir(job))
+@app.route('/getjobs')
+def getstatus():
+    ret = {}
+    jobs = scheduler.get_jobs()
+    ret['status'] = 0
+    ret['jobs'] = jobs
+    return json.dumps(ret)
 
 @app.route('/resume')
 def resumejob():
-    scheduler.resume_job('job1')
-    return "Success!"
+    ret = {}
+    carrier = request.args.get('carrier').lower()
+    scheduler.resume_job(carrier)
+    ret['status'] = 0
+    ret['msg'] = 'resume success!'
+    return json.dumps(ret)
 
 @app.route('/addjob', methods=['GET', 'POST'])
 def addjob():
@@ -94,45 +138,6 @@ def addjob():
 @app.route("/")
 def index():
     return 'hello world'
-
-
-@app.route('/showData')
-def showData():
-    cpus = CPU.select()
-    result = {}
-    return json.dumps(result)
-
-@app.route("/saveData", methods = ['GET', 'POST'])
-def saveData():
-    result = {
-        'statue': 'error',
-        'data': "",
-    }
-    if request.method == "POST":
-        data = request.form # 用来接收请求的数据
-        try:
-            model = data['model']
-            model_name = data['model_name']
-            stepping = data['stepping']
-            microcode = data['microcode']
-            cpu_MHz = data['cpu_MHz']
-
-            cpu = CPU()
-            cpu.model = model
-            cpu.model_name = model_name
-            cpu.stepping = stepping
-            cpu.microcode = microcode
-            cpu.cpu_MHz = cpu_MHz
-            cpu.save()
-            result['statue'] = 'success'
-            result['data'] = 'your data is saved'
-        except Exception as e:
-            result['data'] = str(e)
-    else:
-        result['data'] = 'the request must be post'
-    return json.dumps(result)
-
-
 
 if __name__ == "__main__":
     scheduler.start()
